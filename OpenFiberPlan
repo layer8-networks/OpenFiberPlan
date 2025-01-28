@@ -305,9 +305,3 @@ function Map() {
 
 export default App;
 
-# Passos para rodar o sistema completo:
-1. Configure o backend com Django e PostgreSQL.
-2. Configure o frontend com React.js e conecte-o ao backend.
-3. Use Docker para facilitar o deploy, se necessário.
-
-# O sistema agora possui uma página de login, controle de usuários com níveis de permissão e acesso autenticado ao mapa interativo.
