@@ -1,0 +1,313 @@
+# OpenFiberPlan: Sistema Completo para Planejamento de Redes FTTH
+
+## Estrutura: Backend (Django) + Frontend (React.js) + Banco de Dados (PostgreSQL + PostGIS)
+
+# Este código contém uma estrutura inicial para criar o sistema completo com backend e frontend integrados.
+
+# Backend - Django (API para lógica de negócios e integração com banco de dados)
+
+# 1. Instalando dependências
+# Comando para instalar os pacotes necessários:
+# pip install django djangorestframework psycopg2-binary django-cors-headers networkx djoser
+
+import os
+from django.core.management.utils import get_random_secret_key
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Configurações do Django
+SECRET_KEY = get_random_secret_key()
+DEBUG = True
+ALLOWED_HOSTS = ['*']
+
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'rest_framework',
+    'rest_framework.authtoken',
+    'corsheaders',
+    'djoser',
+    'fiber',  # App para gerenciar projetos FTTH
+]
+
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+]
+
+ROOT_URLCONF = 'openfiberplan.urls'
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'openfiberplan',
+        'USER': 'postgres',
+        'PASSWORD': 'sua_senha',
+        'HOST': 'localhost',
+        'PORT': '5432',
+    }
+}
+
+AUTH_USER_MODEL = 'auth.User'
+
+# Configuração do Django REST Framework e Djoser
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+DJOSER = {
+    'USER_CREATE_PASSWORD_RETYPE': True,
+    'PERMISSIONS': {
+        'user_create': ['rest_framework.permissions.AllowAny'],
+        'user': ['rest_framework.permissions.IsAuthenticated'],
+        'user_delete': ['rest_framework.permissions.IsAdminUser'],
+    },
+}
+
+# Modelos para infraestrutura
+from django.db import models
+
+class Post(models.Model):
+    name = models.CharField(max_length=255)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    
+    def __str__(self):
+        return self.name
+
+class Cable(models.Model):
+    name = models.CharField(max_length=255)
+    start_post = models.ForeignKey(Post, related_name='start_post', on_delete=models.CASCADE)
+    end_post = models.ForeignKey(Post, related_name='end_post', on_delete=models.CASCADE)
+    length = models.FloatField()
+
+    def __str__(self):
+        return self.name
+
+# API com Django REST Framework
+from rest_framework import serializers, viewsets
+
+class PostSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Post
+        fields = '__all__'
+
+class PostViewSet(viewsets.ModelViewSet):
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+
+class CableSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cable
+        fields = '__all__'
+
+class CableViewSet(viewsets.ModelViewSet):
+    queryset = Cable.objects.all()
+    serializer_class = CableSerializer
+
+# Algoritmos de Rota
+import networkx as nx
+
+def calculate_optimal_route(posts):
+    graph = nx.Graph()
+
+    # Adiciona os postes como nós no grafo
+    for post in posts:
+        graph.add_node(post.id, pos=(post.latitude, post.longitude))
+
+    # Adiciona cabos como arestas no grafo
+    cables = Cable.objects.all()
+    for cable in cables:
+        graph.add_edge(
+            cable.start_post.id, 
+            cable.end_post.id, 
+            weight=cable.length
+        )
+
+    # Calcula a rota mínima entre os nós
+    optimal_routes = []
+    for post in posts:
+        for target in posts:
+            if post != target:
+                try:
+                    route = nx.shortest_path(graph, source=post.id, target=target.id, weight='weight')
+                    optimal_routes.append(route)
+                except nx.NetworkXNoPath:
+                    pass
+
+    return optimal_routes
+
+# Endpoint para simulações de rotas
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+@api_view(['GET'])
+def simulate_routes(request):
+    posts = Post.objects.all()
+    routes = calculate_optimal_route(posts)
+    return Response({"routes": routes})
+
+# URLs
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+
+router = DefaultRouter()
+router.register(r'posts', PostViewSet)
+router.register(r'cables', CableViewSet)
+
+urlpatterns = [
+    path('api/', include(router.urls)),
+    path('api/simulate-routes/', simulate_routes),
+    path('auth/', include('djoser.urls')),
+    path('auth/token/', include('djoser.urls.authtoken')),
+]
+
+# Configuração do CORS (para integrar com o frontend)
+CORS_ALLOW_ALL_ORIGINS = True
+
+# Frontend - React.js
+# Dependências do Frontend:
+# - npm install react-leaflet leaflet axios react-router-dom
+
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import axios from 'axios';
+
+function Login({ setAuthenticated }) {
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+
+    const handleLogin = async (e) => {
+        e.preventDefault();
+        try {
+            const response = await axios.post('http://localhost:8000/auth/token/login/', {
+                username,
+                password,
+            });
+            localStorage.setItem('authToken', response.data.auth_token);
+            setAuthenticated(true);
+        } catch (error) {
+            console.error('Erro ao fazer login:', error);
+        }
+    };
+
+    return (
+        <div>
+            <h2>Login</h2>
+            <form onSubmit={handleLogin}>
+                <input
+                    type="text"
+                    placeholder="Usuário"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                />
+                <input
+                    type="password"
+                    placeholder="Senha"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                />
+                <button type="submit">Entrar</button>
+            </form>
+        </div>
+    );
+}
+
+function App() {
+    const [authenticated, setAuthenticated] = useState(false);
+
+    useEffect(() => {
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            setAuthenticated(true);
+        }
+    }, []);
+
+    if (!authenticated) {
+        return <Login setAuthenticated={setAuthenticated} />;
+    }
+
+    return (
+        <Router>
+            <nav>
+                <Link to="/">Mapa</Link>
+            </nav>
+            <Routes>
+                <Route
+                    path="/"
+                    element={<Map />} />
+            </Routes>
+        </Router>
+    );
+}
+
+function Map() {
+    const [posts, setPosts] = useState([]);
+    const [routes, setRoutes] = useState([]);
+
+    useEffect(() => {
+        axios.get('http://localhost:8000/api/posts/')
+            .then((response) => {
+                setPosts(response.data);
+            })
+            .catch((error) => {
+                console.error('Erro ao buscar os dados:', error);
+            });
+
+        axios.get('http://localhost:8000/api/simulate-routes/')
+            .then((response) => {
+                setRoutes(response.data.routes);
+            })
+            .catch((error) => {
+                console.error('Erro ao simular rotas:', error);
+            });
+    }, []);
+
+    return (
+        <MapContainer center={[-23.55, -46.63]} zoom={12} style={{ height: '500px', width: '100%' }}>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            {posts.map((post) => (
+                <Marker key={post.id} position={[post.latitude, post.longitude]}>
+                    <Popup>
+                        {post.name}
+                    </Popup>
+                </Marker>
+            ))}
+            {routes.map((route, index) => (
+                <Polyline
+                    key={index}
+                    positions={route.map((id) => {
+                        const post = posts.find((p) => p.id === id);
+                        return [post.latitude, post.longitude];
+                    })}
+                    color="blue"
+                />
+            ))}
+        </MapContainer>
+    );
+}
+
+export default App;
+
+# Passos para rodar o sistema completo:
+1. Configure o backend com Django e PostgreSQL.
+2. Configure o frontend com React.js e conecte-o ao backend.
+3. Use Docker para facilitar o deploy, se necessário.
+
+# O sistema agora possui uma página de login, controle de usuários com níveis de permissão e acesso autenticado ao mapa interativo.
